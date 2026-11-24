@@ -57,18 +57,22 @@ def log(*parts):
 # --- credentials ---
 
 def user_path(path, flag):
-    """Resolve a file path given on the command line. Refuse one outside
-    the user's home directory and the current directory, so a mistyped or
-    injected argument cannot read or create system files."""
+    """Resolve a file path given on the command line. Only a file directly in
+    the user's home directory or in the current directory is accepted, so a
+    mistyped or injected argument cannot read or create other files. The
+    returned path is rebuilt from that directory and the file name."""
     full = os.path.realpath(os.path.expanduser(path))
+    folder = os.path.dirname(full)
     home = os.path.realpath(os.path.expanduser("~"))
     cwd = os.path.realpath(os.getcwd())
-    if os.path.commonpath([home, full]) == home:
-        return full
-    if os.path.commonpath([cwd, full]) == cwd:
-        return full
-    sys.exit(f"{flag} must be a file in your home directory or the current "
-             f"directory, not {path}")
+    if folder == home:
+        base = home
+    elif folder == cwd:
+        base = cwd
+    else:
+        sys.exit(f"{flag} must be a file in your home directory or the current "
+                 f"directory, not {path}; move it there, or run from its folder")
+    return os.path.join(base, os.path.basename(full))
 
 
 def init_env(path):
