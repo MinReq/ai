@@ -86,6 +86,25 @@ try: code, out = run(*BASE, "--instructions-file", linkp, "--check")
 finally: os.path.realpath = real_realpath
 os.remove(decoy)
 check("paths: a link that realpath() misreads is refused (the kernel's file is checked)", path_refused(code, out) and "cannot confirm" in str(code), (code, out))
+# ".." after a linked folder means what the kernel says: here it leads outside, so the file is refused,
+# and the home file of the same name is not read instead.
+sub = os.path.join(outside, "sub"); os.mkdir(sub)
+with open(os.path.join(outside, "agent.txt"), "w") as f: f.write("OUTSIDE-FILE-CONTENT-1234\n")
+linkdir = os.path.join(tmp, "linkdir"); os.symlink(sub, linkdir)
+code, out = run(*BASE, "--instructions-file", os.path.join(linkdir, "..", "agent.txt"), "--check")
+check("paths: '..' after a linked folder is resolved like the kernel does (outside: refused)", path_refused(code, out) and "instructions=18 chars" not in out, (code, out))
+# A link whose target realpath() spells through a folder alias (macOS letter case, firmlinks) is still
+# recognised as inside home: folders are compared by identity, not by spelling.
+alias = os.path.join(outside, "home-alias"); os.symlink(tmp, alias)
+aliasp = os.path.join(tmp, ".alias-openai.env"); os.symlink(envp, aliasp)
+alias_target = os.path.join(alias, os.path.basename(envp))
+real_realpath = os.path.realpath
+os.path.realpath = lambda p, *a, **k: alias_target if str(p).endswith(".alias-openai.env") else real_realpath(p, *a, **k)
+try: code, out = run("--env-file", aliasp, *BASE[2:], "--check")
+finally: os.path.realpath = real_realpath
+check("paths: a link target spelled through a folder alias of home is accepted", code == 0 and "check OK" in out, (code, out))
+for p in (linkdir, aliasp, alias, os.path.join(outside, "agent.txt")): os.remove(p)
+os.rmdir(sub)
 subdir = os.path.join(tmp, "prompts"); os.mkdir(subdir); subp = os.path.join(subdir, "agent.txt")
 with open(subp, "w") as f: f.write("Test instructions.\n")
 code, out = run(*BASE, "--instructions-file", subp, "--check")
