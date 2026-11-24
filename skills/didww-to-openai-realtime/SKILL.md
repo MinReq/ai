@@ -21,7 +21,8 @@ it on every call, and DIDWW only carries the call. This skill follows
 DIDWW's production guide,
 https://doc.didww.com/integrations/openai/index.html, and ships two
 scripts: `scripts/webhook_server.py` (incoming calls and transfers) and
-`scripts/gptlive_call.py` (outbound calls). Not a no-code path; say so in
+`scripts/gptlive_call.py` (outbound calls). Both import
+`scripts/safe_paths.py`, so deploy it next to them. Not a no-code path; say so in
 intake and offer the hosted platforms (didww-connect) if the user cannot
 run code.
 
