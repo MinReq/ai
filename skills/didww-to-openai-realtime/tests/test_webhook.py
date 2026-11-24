@@ -134,4 +134,7 @@ check("startup: transfer target that is a served DID refused (loops back)", len(
 env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_WEBHOOK_SECRET",)}
 r = subprocess.run([sys.executable, "-B", P], env=env, capture_output=True, text=True, timeout=10)
 check("startup: refuses to run without OPENAI_WEBHOOK_SECRET", r.returncode != 0 and "OPENAI_WEBHOOK_SECRET" in r.stderr, (r.returncode, r.stderr[-200:]))
+env["HOME"] = os.path.dirname(os.path.abspath(P))
+r = subprocess.run([sys.executable, "-B", P, "--env-file", "/etc/hosts"], env=env, capture_output=True, text=True, timeout=10)
+check("startup: --env-file outside home and the current directory refused", r.returncode != 0 and "home directory" in r.stderr, (r.returncode, r.stderr[-200:]))
 print(f"\n{sum(results)}/{len(results)} passed"); sys.exit(0 if all(results) else 1)

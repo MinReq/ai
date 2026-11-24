@@ -56,8 +56,23 @@ def log(*parts):
 
 # --- credentials ---
 
+def user_path(path, flag):
+    """Resolve a file path given on the command line. Refuse one outside
+    the user's home directory and the current directory, so a mistyped or
+    injected argument cannot read or create system files."""
+    full = os.path.realpath(os.path.expanduser(path))
+    home = os.path.realpath(os.path.expanduser("~"))
+    cwd = os.path.realpath(os.getcwd())
+    if os.path.commonpath([home, full]) == home:
+        return full
+    if os.path.commonpath([cwd, full]) == cwd:
+        return full
+    sys.exit(f"{flag} must be a file in your home directory or the current "
+             f"directory, not {path}")
+
+
 def init_env(path):
-    path = os.path.expanduser(path)
+    path = user_path(path, "--init-env")
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
@@ -89,7 +104,7 @@ def load_env_file(path):
 def load_credentials(env_file):
     creds = {}
     if env_file:
-        path = os.path.expanduser(env_file)
+        path = user_path(env_file, "--env-file")
         if os.stat(path).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
             print(f"warning: other users can read {path}; run: chmod 600 {path}")
         creds.update(load_env_file(path))
@@ -266,7 +281,8 @@ def main():
     if not 10 <= args.max_seconds <= 7200:
         sys.exit("--max-seconds must be between 10 and 7200")
     if args.instructions_file:
-        with open(os.path.expanduser(args.instructions_file), encoding="utf-8") as f:
+        with open(user_path(args.instructions_file, "--instructions-file"),
+                  encoding="utf-8") as f:
             instructions = f.read().strip()
     else:
         instructions = (args.instructions or DEFAULT_INSTRUCTIONS).strip()
@@ -306,7 +322,7 @@ def main():
     log("placing ONE call:", summary)
     try:
         status, body = post("/v1/live/sessions", payload)
-    except (urllib.error.URLError, OSError) as e:
+    except OSError as e:  # includes urllib.error.URLError
         log(f"create request failed ({e}); the call may still have been placed. "
             "Check the DIDWW Outbound Call Logs before trying again.")
         return 1
@@ -317,7 +333,7 @@ def main():
 
     try:
         sb = Sideband(sid)
-    except (OSError, ConnectionError) as e:
+    except OSError as e:  # includes ConnectionError
         log("attach failed:", e, "- hanging up so the call does not run unattended")
         log("hangup ->", *post(f"/v1/live/sessions/{sid}/hangup"))
         return 2
@@ -330,7 +346,7 @@ def main():
         while time.time() < deadline:
             try:
                 msg = sb.recv(min(1.0, max(0.0, deadline - time.time())))
-            except (OSError, ConnectionError) as e:
+            except OSError as e:  # includes ConnectionError
                 log("sideband ended:", e)
                 break
             if msg is None:

@@ -10,6 +10,7 @@ spec = importlib.util.spec_from_file_location("gptlive_call", P); mod = importli
 FAKE = {"OPENAI_API_KEY": "sk-test-FAKEKEY", "DIDWW_SIP_USERNAME": "fakeuser123", "DIDWW_SIP_PASSWORD": "fakepass456"}
 for k in FAKE: os.environ.pop(k, None)
 tmp = tempfile.mkdtemp(); envp = os.path.join(tmp, "didww-openai.env")
+os.environ["HOME"] = tmp  # files given on the command line must be in the home or current directory
 
 class Clock:  # instant deadlines: the fake sideband advances this clock
     now = 1000.0
@@ -58,6 +59,20 @@ for label, extra in (("number without +", ("--to", "15105550199")), ("same numbe
     check(f"validation: {label} refused", code not in (0, None) and not calls, out)
 os.chmod(envp, 0o644); code, out = run(*BASE, "--check"); os.chmod(envp, 0o600)
 check("credentials: warns when the env file is readable by others", "chmod 600" in out, out)
+agentp, linkp = os.path.join(tmp, "agent.txt"), os.path.join(tmp, "escape.txt")
+with open(agentp, "w") as f: f.write("Test instructions.\n")
+os.symlink("/etc/hosts", linkp)
+code, out = run(*BASE, "--instructions-file", agentp, "--check")
+check("paths: --instructions-file in the home directory is read", code == 0 and "instructions=18 chars" in out, (code, out))
+code, out = run(*BASE, "--instructions-file", "/etc/hosts", "--check")
+check("paths: --instructions-file outside home and the current directory refused", "home directory" in str(code) and not calls, (code, out))
+code, out = run(*BASE, "--instructions-file", linkp, "--check")
+check("paths: a symlink pointing outside is refused", "home directory" in str(code) and not calls, (code, out))
+code, out = run("--env-file", "/etc/hosts", "--to", "+15105550199", "--from", "+15105550100", "--check")
+check("paths: --env-file outside home and the current directory refused", "home directory" in str(code) and not calls, (code, out))
+code, out = run("--init-env", "/etc/didww-openai-test.env")
+check("paths: --init-env outside home and the current directory refused", "home directory" in str(code) and not os.path.exists("/etc/didww-openai-test.env"), (code, out))
+os.remove(agentp); os.remove(linkp)
 
 EVENTS[:] = [
     {"type": "error", "event_id": "e0", "error": {"code": "missing_scope", "message": "History compaction is disabled"}},

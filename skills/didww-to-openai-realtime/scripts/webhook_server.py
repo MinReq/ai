@@ -288,8 +288,22 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+def user_path(path):
+    """Resolve the --env-file path. Refuse one outside the user's home
+    directory and the current directory, so a mistyped or injected argument
+    cannot read system files."""
+    full = os.path.realpath(os.path.expanduser(path))
+    home = os.path.realpath(os.path.expanduser("~"))
+    cwd = os.path.realpath(os.getcwd())
+    if os.path.commonpath([home, full]) == home:
+        return full
+    if os.path.commonpath([cwd, full]) == cwd:
+        return full
+    sys.exit("--env-file must be a file in your home directory or the "
+             f"current directory, not {path}")
+
 def load_env_file(path):
-    with open(os.path.expanduser(path), encoding="utf-8") as f:
+    with open(user_path(path), encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
