@@ -273,7 +273,8 @@ class Transcript:
         self.role, self.buf = None, []
 
 
-def handle_delegation(delegation, transcript):  # NOSONAR: unused until your backend reads them
+# The placeholder below ignores both arguments; your backend reads them.
+def handle_delegation(delegation, transcript):  # NOSONAR
     """Return (event_type, content) for one delegated task.
 
     Replace this with your backend: work out the task from
