@@ -44,10 +44,12 @@ October 2026.
    meanwhile. Create New, Friendly name (e.g. `Vogent`), Authentication
    method Credentials & IP-based. Allowed SIP IP addresses: the outbound
    SIP source ranges Vogent provides for an enterprise account, together
-   with DIDWW's seven inbound signaling IPs (the guide's list:
-   `46.19.209.14`, `46.19.210.14`, `46.19.212.14`, `46.19.213.14`,
-   `46.19.214.14`, `46.19.215.14`, `185.238.173.14` and
-   `184.195.128.0/21`). Vogent publishes no static range
+   with DIDWW's seven inbound signaling IPs (`46.19.209.14`,
+   `46.19.210.14`, `46.19.212.14`, `46.19.213.14`, `46.19.214.14`,
+   `46.19.215.14`, `185.238.173.14`). The guide's list also has
+   `184.195.128.0/21`, which is not a DIDWW signaling IP and is not in
+   Vogent's public docs: confirm it with Vogent or DIDWW support before
+   relying on it. Vogent publishes no static range
    outside its enterprise plan: without one, send the user to DIDWW
    support (support@didww.com) to confirm a supported authentication
    setup. `0.0.0.0/0` is for temporary testing only, at the user's own

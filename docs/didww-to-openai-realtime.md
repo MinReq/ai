@@ -94,7 +94,7 @@ All DIDWW inbound changes go through the DIDWW MCP under your own account permis
   python3 webhook_server.py --env-file ~/.didww-openai.env
   ```
 
-  It refuses to start without both secrets, with a `tel:` transfer target, or with a target that would route back to the agent.
+  It refuses to start without both secrets, with a `tel:` transfer target, or with a target that would route back to the agent. It reads `--env-file` only from your home directory or the current directory; as a service, set its working directory to the env file's folder or pass `OPENAI_API_KEY` and `OPENAI_WEBHOOK_SECRET` in its environment.
 
 > [!NOTE]
 > OpenAI's SIP endpoint has no digest authentication. Anyone who knows your project ID can send an INVITE to it, so the backend's number match is routing, not authentication. Keep the project ID private, keep the signed webhook check, and keep the rejection of unknown numbers in place.
@@ -119,7 +119,7 @@ DIDWW supports cold transfers by SIP REFER on incoming calls. The server calls O
     --from +15105550100 --instructions-file agent.txt
   ```
 
-  `--check` validates everything without placing a call.
+  `--check` validates everything without placing a call. `agent.txt` must be in the folder you run the command from or in your home directory; for text kept elsewhere, pass `--instructions "$(cat FILE)"` instead.
 - **Delegation:** GPT-Live hands reasoning and tool work to your server. If nothing answers, the agent says it needs a moment and then stays silent. The script answers every delegated task with a short result, so the agent continues; replace that function with your real lookups or actions.
 
 ## Step 4. Verify the connection

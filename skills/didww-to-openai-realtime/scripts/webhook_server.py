@@ -288,23 +288,42 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+def current_dir():
+    try:
+        return os.path.realpath(os.getcwd())
+    except OSError:  # the current directory was deleted
+        return None
+
+def same_dir(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
 def user_path(path):
     """Resolve the --env-file path. Only a file directly in the user's home
-    directory or in the current directory is accepted, so a mistyped or
-    injected argument cannot read other files. The returned path is rebuilt
-    from that directory and the file name."""
-    full = os.path.realpath(os.path.expanduser(path))
-    folder = os.path.dirname(full)
-    home = os.path.realpath(os.path.expanduser("~"))
-    cwd = os.path.realpath(os.getcwd())
-    if folder == home:
-        base = home
-    elif folder == cwd:
-        base = cwd
-    else:
-        sys.exit("--env-file must be a file in your home directory or the "
-                 f"current directory, not {path}; move it there, or run from its folder")
-    return os.path.join(base, os.path.basename(full))
+    directory or in the current directory is accepted, and a symbolic link
+    there must point inside one of them, so a mistyped or injected argument
+    cannot reach other files. The returned path is rebuilt from that
+    directory and the name as given, so the kernel follows a link the same
+    way it did before this check."""
+    home, cwd = os.path.realpath(os.path.expanduser("~")), current_dir()
+    raw = os.path.expanduser(path)
+    if cwd is None and not os.path.isabs(raw):
+        sys.exit(f"--env-file {path}: the current directory no longer exists")
+    given = os.path.abspath(raw)
+    bases = [d for d in (home, cwd) if d]
+    base = next((d for d in bases if same_dir(os.path.dirname(given), d)), None)
+    if base is None:
+        sys.exit("--env-file must name a file directly in your home directory or "
+                 f"the current directory, not {path}. Move it there, run from its "
+                 "folder, or set OPENAI_API_KEY and OPENAI_WEBHOOK_SECRET in the "
+                 "environment instead.")
+    target = os.path.realpath(given)
+    if not any(os.path.commonpath([d, target]) == d for d in bases):
+        sys.exit(f"--env-file {path} is a link to {target}, outside your home "
+                 "directory and the current directory")
+    return os.path.join(base, os.path.basename(given))
 
 def load_env_file(path):
     with open(user_path(path), encoding="utf-8") as f:

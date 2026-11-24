@@ -97,7 +97,11 @@ the user in the panel, not through MCP, so they never pass through you.
    `scripts/webhook_server.py` (DID -> instructions, greeting, optional
    `transfer_to`), run it with `--env-file ~/.didww-openai.env` (or set
    `OPENAI_API_KEY` and `OPENAI_WEBHOOK_SECRET` in its environment)
-   behind public HTTPS. It refuses to start with a `tel:` or looping
+   behind public HTTPS. Both scripts read a file named on the command
+   line only from the home directory or the current directory (a link
+   there may point anywhere inside them); as a service, set its working
+   directory to the env file's folder or pass the two variables in its
+   environment. It refuses to start with a `tel:` or looping
    transfer target. It verifies the
    webhook signature, drops duplicate deliveries, reads the called number
    from `Diversion` (falls back to `To`), accepts known DIDs with the
@@ -177,7 +181,9 @@ the call and OpenAI dials through the DIDWW outbound trunk.
    Username and Password as `DIDWW_SIP_USERNAME` / `DIDWW_SIP_PASSWORD`.
    OpenAI's dashboard has no place for them: they travel with every call
    request.
-4. **Dry check, then one call:**
+4. **Dry check, then one call.** Put `agent.txt` in the folder the
+   command runs from (or in home); for text kept elsewhere, pass
+   `--instructions "$(cat FILE)"` instead.
    ```
    python3 scripts/gptlive_call.py --env-file ~/.didww-openai.env \
      --to +15105550199 --from +15105550100 \

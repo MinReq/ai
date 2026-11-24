@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Signed-webhook tests for didww-to-openai-realtime/scripts/webhook_server.py.
 Starts the real handler on a local port, stubs only the OpenAI HTTP call."""
-import base64, contextlib, hashlib, hmac, http.client, importlib.util, io, itertools, json, os, socket, struct, subprocess, sys, threading, time, urllib.error, urllib.request
+import base64, contextlib, hashlib, hmac, http.client, importlib.util, io, itertools, json, os, socket, struct, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 from http.server import ThreadingHTTPServer
 sys.dont_write_bytecode = True  # keep __pycache__ out of the skill folders
 P = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "webhook_server.py"); results = []
@@ -134,7 +134,28 @@ check("startup: transfer target that is a served DID refused (loops back)", len(
 env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_WEBHOOK_SECRET",)}
 r = subprocess.run([sys.executable, "-B", P], env=env, capture_output=True, text=True, timeout=10)
 check("startup: refuses to run without OPENAI_WEBHOOK_SECRET", r.returncode != 0 and "OPENAI_WEBHOOK_SECRET" in r.stderr, (r.returncode, r.stderr[-200:]))
-env["HOME"] = os.path.dirname(os.path.abspath(P))
-r = subprocess.run([sys.executable, "-B", P, "--env-file", "/etc/hosts"], env=env, capture_output=True, text=True, timeout=10)
-check("startup: --env-file outside home and the current directory refused", r.returncode != 0 and "home directory" in r.stderr, (r.returncode, r.stderr[-200:]))
+home, here, outside = (tempfile.mkdtemp() for _ in range(3))
+with open(os.path.join(home, ".didww-openai.env"), "w") as f: f.write("REALTIME_TEST_HOME=from-home\n")
+with open(os.path.join(here, "server.env"), "w") as f: f.write("REALTIME_TEST_CWD=from-cwd\n")
+with open(os.path.join(outside, "x.env"), "w") as f: f.write("REALTIME_TEST_OUT=from-outside\n")
+os.symlink(os.path.join(outside, "x.env"), os.path.join(home, "escape.env"))
+home0, cwd0 = os.environ.get("HOME"), os.getcwd()
+os.environ["HOME"] = home; os.chdir(here)
+try:
+    mod.load_env_file("~/.didww-openai.env"); mod.load_env_file("server.env")
+    check("--env-file: the documented ~/.didww-openai.env is read", os.environ.get("REALTIME_TEST_HOME") == "from-home")
+    check("--env-file: a file in the current directory is read", os.environ.get("REALTIME_TEST_CWD") == "from-cwd")
+    for bad in (os.path.join(outside, "x.env"), "~/escape.env"):
+        try: mod.load_env_file(bad); msg = None
+        except SystemExit as e: msg = str(e.code)
+        check(f"--env-file: {'a link pointing outside' if bad.startswith('~') else 'a file outside'} is refused", msg and "home directory" in msg and "REALTIME_TEST_OUT" not in os.environ, msg)
+finally:
+    os.chdir(cwd0); os.environ["HOME"] = home0 if home0 is not None else os.environ.pop("HOME")
+    for k in ("REALTIME_TEST_HOME", "REALTIME_TEST_CWD", "REALTIME_TEST_OUT"): os.environ.pop(k, None)
+env["HOME"] = home
+r = subprocess.run([sys.executable, "-B", P, "--env-file", os.path.join(outside, "x.env")], env=env, capture_output=True, text=True, timeout=10)
+check("startup: --env-file outside home and the current directory refused", r.returncode != 0 and "home directory" in r.stderr and "environment" in r.stderr, (r.returncode, r.stderr[-200:]))
+for d in (home, here, outside):
+    for n in os.listdir(d): os.remove(os.path.join(d, n))
+    os.rmdir(d)
 print(f"\n{sum(results)}/{len(results)} passed"); sys.exit(0 if all(results) else 1)

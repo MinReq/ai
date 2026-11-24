@@ -42,6 +42,7 @@ def run(*argv):
     with contextlib.redirect_stdout(out):
         try: code = mod.main()
         except SystemExit as e: code = e.code
+        except OSError as e: code = f"OSError: {e}"  # e.g. a symlink loop: a failure, not a crash of the suite
     return code, out.getvalue()
 BASE = ("--env-file", envp, "--to", "+15105550199", "--from", "+15105550100")
 
@@ -59,28 +60,51 @@ for label, extra in (("number without +", ("--to", "15105550199")), ("same numbe
     check(f"validation: {label} refused", code not in (0, None) and not calls, out)
 os.chmod(envp, 0o644); code, out = run(*BASE, "--check"); os.chmod(envp, 0o600)
 check("credentials: warns when the env file is readable by others", "chmod 600" in out, out)
+# Paths: HOME is tmp; "outside" is a second temp folder that is neither home nor the current directory.
+outside = tempfile.mkdtemp(); secretp = os.path.join(outside, "secret.txt")
+with open(secretp, "w") as f: f.write("OUTSIDE-FILE-CONTENT-1234\n")  # 25 chars once stripped
+def path_refused(code, out): return code not in (0, None) and "instructions=25 chars" not in out and not calls
 agentp, linkp = os.path.join(tmp, "agent.txt"), os.path.join(tmp, "escape.txt")
 with open(agentp, "w") as f: f.write("Test instructions.\n")
-os.symlink("/etc/hosts", linkp)
+os.symlink(secretp, linkp)
 code, out = run(*BASE, "--instructions-file", agentp, "--check")
 check("paths: --instructions-file in the home directory is read", code == 0 and "instructions=18 chars" in out, (code, out))
-code, out = run(*BASE, "--instructions-file", "/etc/hosts", "--check")
-check("paths: --instructions-file outside home and the current directory refused", "home directory" in str(code) and not calls, (code, out))
+code, out = run(*BASE, "--instructions-file", secretp, "--check")
+check("paths: --instructions-file outside home and the current directory refused", path_refused(code, out) and "home directory" in str(code), (code, out))
 code, out = run(*BASE, "--instructions-file", linkp, "--check")
-check("paths: a symlink pointing outside is refused", "home directory" in str(code) and not calls, (code, out))
+check("paths: a symlink pointing outside is refused", path_refused(code, out) and "is a link to" in str(code), (code, out))
+os.symlink("loop", os.path.join(tmp, "loop")); os.symlink(secretp, os.path.join(tmp, "evil")); os.symlink("loop/../evil", os.path.join(tmp, "trick.txt"))
+code, out = run(*BASE, "--instructions-file", os.path.join(tmp, "trick.txt"), "--check")
+check("paths: a symlink loop cannot smuggle in an outside file", path_refused(code, out), (code, out))
 subdir = os.path.join(tmp, "prompts"); os.mkdir(subdir); subp = os.path.join(subdir, "agent.txt")
 with open(subp, "w") as f: f.write("Test instructions.\n")
 code, out = run(*BASE, "--instructions-file", subp, "--check")
-check("paths: a file in a subfolder is refused with how to fix it", "run from its folder" in str(code) and not calls, (code, out))
+check("paths: a file in a subfolder is refused with how to fix it", "run from its folder" in str(code) and '--instructions "$(cat FILE)"' in str(code) and not calls, (code, out))
 cwd0 = os.getcwd(); os.chdir(subdir)
 code, out = run(*BASE, "--instructions-file", "agent.txt", "--check")
-os.chdir(cwd0); os.remove(subp); os.rmdir(subdir)
+os.chdir(cwd0)
 check("paths: a relative file in the current directory is read", code == 0 and "instructions=18 chars" in out, (code, out))
-code, out = run("--env-file", "/etc/hosts", "--to", "+15105550199", "--from", "+15105550100", "--check")
-check("paths: --env-file outside home and the current directory refused", "home directory" in str(code) and not calls, (code, out))
-code, out = run("--init-env", "/etc/didww-openai-test.env")
-check("paths: --init-env outside home and the current directory refused", "home directory" in str(code) and not os.path.exists("/etc/didww-openai-test.env"), (code, out))
-os.remove(agentp); os.remove(linkp)
+realp, dotlink = os.path.join(subdir, "real.env"), os.path.join(tmp, ".linked-openai.env")
+os.rename(envp, realp); os.symlink(realp, dotlink)  # dotfile managers link the home file into a subfolder
+code, out = run("--env-file", dotlink, *BASE[2:], "--check")
+os.remove(dotlink); os.rename(realp, envp)
+check("paths: --env-file linked from home into a home subfolder is read", code == 0 and "check OK" in out, (code, out))
+code, out = run("--env-file", secretp, *BASE[2:], "--check")
+check("paths: --env-file outside home and the current directory refused", "home directory" in str(code) and "environment" in str(code) and not calls, (code, out))
+code, out = run("--init-env", os.path.join(outside, "new.env"))
+check("paths: --init-env outside home and the current directory refused", "home directory" in str(code) and not os.path.exists(os.path.join(outside, "new.env")), (code, out))
+dangling = os.path.join(tmp, ".dangling.env"); os.symlink(os.path.join(tmp, "nowhere.env"), dangling)
+code, out = run("--init-env", dangling)
+check("paths: --init-env on a dangling link is refused and creates nothing", "already exists" in str(code) and not os.path.exists(os.path.join(tmp, "nowhere.env")), (code, out))
+gone = tempfile.mkdtemp(); os.chdir(gone); os.rmdir(gone)
+code, out = run(*BASE, "--check")
+code2, out2 = run(*BASE, "--instructions-file", "agent.txt", "--check")
+os.chdir(cwd0)
+check("paths: a deleted current directory still allows a file in home", code == 0 and "check OK" in out, (code, out))
+check("paths: a deleted current directory refuses a relative name with a message", "no longer exists" in str(code2), (code2, out2))
+for p in (agentp, linkp, dangling, subp, *(os.path.join(tmp, n) for n in ("loop", "evil", "trick.txt"))):
+    os.remove(p)
+os.rmdir(subdir); os.remove(secretp); os.rmdir(outside)
 
 EVENTS[:] = [
     {"type": "error", "event_id": "e0", "error": {"code": "missing_scope", "message": "History compaction is disabled"}},

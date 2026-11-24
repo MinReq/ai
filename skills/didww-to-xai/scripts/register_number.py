@@ -34,9 +34,11 @@ screen shows a redacted copy. Stdlib only; API errors print verbatim.
 """
 import ipaddress, json, os, re, sys, urllib.error, urllib.request
 
-DIDWW_SIGNALING = ["46.19.209.14/32", "46.19.210.14/32", "46.19.212.14/32",
-                   "46.19.213.14/32", "46.19.214.14/32", "46.19.215.14/32",
-                   "185.238.173.14/32"]
+# DIDWW's published inbound signaling IPs (doc.didww.com SIP connectivity
+# reference); xAI allows SIP from them with --allow-didww.
+DIDWW_SIGNALING = ["46.19.209.14/32", "46.19.210.14/32", "46.19.212.14/32",  # NOSONAR
+                   "46.19.213.14/32", "46.19.214.14/32", "46.19.215.14/32",  # NOSONAR
+                   "185.238.173.14/32"]  # NOSONAR
 VALUE = {"--number", "--agent", "--webhook", "--sip-user", "--sip-pass",
          "--allow-ip", "--name", "--out", "--env-file", "--delete"}
 BOOL = {"--digest", "--allow-didww", "--list", "--help", "-h"}
@@ -134,7 +136,7 @@ if webhook and not webhook.startswith("https://"):
     sys.exit("--webhook must be an https:// URL (xAI signs, but does not "
              "encrypt, what it sends there).")
 OUT = one("--out") or f"xai-{number.lstrip('+')}.json"
-if webhook and os.path.exists(OUT):
+if webhook and os.path.lexists(OUT):  # a dangling link too: O_EXCL refuses it later
     sys.exit(f"{OUT} exists; pass --out with a new file name (it will hold "
              "the one-time webhook secret).")
 

@@ -20,8 +20,8 @@ credentials on the command line or in chat.
   gptlive_call.py --env-file ~/.didww-openai.env --to +15105550199 \\
       --from +15105550100 --instructions-file agent.txt
 """
-import argparse, base64, json, os, re, select, socket, ssl, stat, struct, sys
-import time, urllib.error, urllib.request
+import argparse, base64, json, os, re, select, shlex, socket, ssl, stat, struct
+import sys, time, urllib.error, urllib.request
 
 API_HOST = "api.openai.com"
 MODEL = os.environ.get("LIVE_MODEL", "gpt-live-1")
@@ -56,28 +56,56 @@ def log(*parts):
 
 # --- credentials ---
 
+# What to do instead when user_path() refuses a file, per option.
+PATH_HINTS = {
+    "--init-env": "",
+    "--env-file": ", or set the variables in the environment instead",
+    "--instructions-file": ', or pass the text with --instructions "$(cat FILE)"',
+}
+
+
+def current_dir():
+    try:
+        return os.path.realpath(os.getcwd())
+    except OSError:  # the current directory was deleted
+        return None
+
+
+def same_dir(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def user_path(path, flag):
     """Resolve a file path given on the command line. Only a file directly in
-    the user's home directory or in the current directory is accepted, so a
-    mistyped or injected argument cannot read or create other files. The
-    returned path is rebuilt from that directory and the file name."""
-    full = os.path.realpath(os.path.expanduser(path))
-    folder = os.path.dirname(full)
-    home = os.path.realpath(os.path.expanduser("~"))
-    cwd = os.path.realpath(os.getcwd())
-    if folder == home:
-        base = home
-    elif folder == cwd:
-        base = cwd
-    else:
-        sys.exit(f"{flag} must be a file in your home directory or the current "
-                 f"directory, not {path}; move it there, or run from its folder")
-    return os.path.join(base, os.path.basename(full))
+    the user's home directory or in the current directory is accepted, and a
+    symbolic link there must point inside one of them, so a mistyped or
+    injected argument cannot reach other files. The returned path is rebuilt
+    from that directory and the name as given, so the kernel follows a link
+    the same way it did before this check."""
+    home, cwd = os.path.realpath(os.path.expanduser("~")), current_dir()
+    raw = os.path.expanduser(path)
+    if cwd is None and not os.path.isabs(raw):
+        sys.exit(f"{flag} {path}: the current directory no longer exists")
+    given = os.path.abspath(raw)
+    bases = [d for d in (home, cwd) if d]
+    base = next((d for d in bases if same_dir(os.path.dirname(given), d)), None)
+    if base is None:
+        sys.exit(f"{flag} must name a file directly in your home directory or the "
+                 f"current directory, not {path}. Move it there or run from its "
+                 f"folder{PATH_HINTS[flag]}.")
+    target = os.path.realpath(given)
+    if not any(os.path.commonpath([d, target]) == d for d in bases):
+        sys.exit(f"{flag} {path} is a link to {target}, outside your home "
+                 "directory and the current directory")
+    return os.path.join(base, os.path.basename(given))
 
 
 def init_env(path):
     path = user_path(path, "--init-env")
-    try:
+    try:  # O_EXCL also refuses an existing symbolic link, even a dangling one
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         sys.exit(f"{path} already exists; not overwritten")
@@ -91,7 +119,8 @@ def init_env(path):
                 "DIDWW_SIP_PASSWORD=\n"
                 "# Incoming calls only: the webhook signing secret (whsec_...)\n"
                 "OPENAI_WEBHOOK_SECRET=\n")
-    print(f"created {path} (mode 600); fill it in, then run with --env-file {path} --check")
+    print(f"created {path} (mode 600); fill it in, then run with "
+          f"--env-file {shlex.quote(path)} --check")
 
 
 def load_env_file(path):
@@ -110,7 +139,7 @@ def load_credentials(env_file):
     if env_file:
         path = user_path(env_file, "--env-file")
         if os.stat(path).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
-            print(f"warning: other users can read {path}; run: chmod 600 {path}")
+            print(f"warning: other users can read {path}; run: chmod 600 {shlex.quote(path)}")
         creds.update(load_env_file(path))
     for k in KEYS:  # the environment wins over the file
         if os.environ.get(k):
@@ -189,25 +218,30 @@ class Sideband:
         while True:
             if not self.s.pending() and not select.select([self.s], [], [], wait)[0]:
                 return None
-            b1, b2 = self._recv(2)
-            opcode, n = b1 & 0x0F, b2 & 0x7F
-            if n == 126:
-                n = struct.unpack(">H", self._recv(2))[0]
-            elif n == 127:
-                n = struct.unpack(">Q", self._recv(8))[0]
-            mask = self._recv(4) if b2 & 0x80 else None
-            data = self._recv(n)
-            if mask:
-                data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+            fin, opcode, data = self._read_frame()
             if opcode == 0x8:
                 raise ConnectionError("closed by OpenAI")
             if opcode == 0x9:
                 self._send(0xA, data)
             elif opcode in (0x0, 0x1):
                 self.parts.append(data)
-                if b1 & 0x80:
+                if fin:
                     msg, self.parts = b"".join(self.parts).decode(), []
                     return msg
+
+    def _read_frame(self):
+        """One whole frame: (final fragment?, opcode, unmasked payload)."""
+        b1, b2 = self._recv(2)
+        n = b2 & 0x7F
+        if n == 126:
+            n = struct.unpack(">H", self._recv(2))[0]
+        elif n == 127:
+            n = struct.unpack(">Q", self._recv(8))[0]
+        mask = self._recv(4) if b2 & 0x80 else None
+        data = self._recv(n)
+        if mask:
+            data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+        return b1 & 0x80, b1 & 0x0F, data
 
     def close(self):
         try:
@@ -239,7 +273,7 @@ class Transcript:
         self.role, self.buf = None, []
 
 
-def handle_delegation(delegation, transcript):
+def handle_delegation(delegation, transcript):  # NOSONAR: unused until your backend reads them
     """Return (event_type, content) for one delegated task.
 
     Replace this with your backend: work out the task from
@@ -248,6 +282,112 @@ def handle_delegation(delegation, transcript):
     is silent context; content is limited to 500 tokens. Report an action as
     done only after it really succeeded."""
     return "session.commentary.append", NO_BACKEND_REPLY
+
+
+class SidebandEnded(Exception):
+    """The sideband WebSocket closed or failed."""
+
+
+class Call:
+    """One attached call: reads sideband events until the session closes or
+    the time limit, logs progress and the transcript, and answers every
+    delegated task so the agent does not go silent."""
+
+    TRANSCRIPT_ROLES = {"session.input_transcript.delta": "person",
+                        "session.output_transcript.delta": "agent"}
+
+    def __init__(self, sb, max_seconds):
+        self.sb = sb
+        self.transcript, self.seen, self.streams = Transcript(), set(), set()
+        self.answered = self.closed = False
+        self.deadline, self.n = time.time() + max_seconds, 0
+
+    def run(self):
+        try:
+            while time.time() < self.deadline:
+                ev = self.next_event()
+                if ev is not None and self.handle(ev):
+                    break
+        except SidebandEnded:
+            pass
+        except KeyboardInterrupt:
+            log("interrupted")
+        self.transcript.flush()
+
+    def next_event(self):
+        """The next new event, or None when there is nothing to handle yet."""
+        try:
+            msg = self.sb.recv(min(1.0, max(0.0, self.deadline - time.time())))
+        except OSError as e:  # includes ConnectionError
+            log("sideband ended:", e)
+            raise SidebandEnded from e
+        if msg is None:
+            return None
+        try:
+            ev = json.loads(msg)
+        except ValueError:
+            return None
+        eid = ev.get("event_id")
+        if eid in self.seen:
+            return None
+        if eid:
+            self.seen.add(eid)
+        return ev
+
+    def handle(self, ev):
+        """Handle one event; True once the session is closed."""
+        t = ev.get("type", "")
+        role = self.TRANSCRIPT_ROLES.get(t)
+        if role:
+            self.transcript.add(role, ev.get("delta", ""))
+            return False
+        if t in QUIET or t.endswith(".delta"):
+            if t not in self.streams:  # e.g. output audio proves the agent spoke
+                self.streams.add(t)
+                log(f"{t} (first one; further ones not shown)")
+            return False
+        self.transcript.flush()
+        handler = self.HANDLERS.get(t)
+        if handler is None:
+            log(t)
+            return False
+        return handler(self, ev)
+
+    def on_ringing(self, ev):
+        log("ringing")
+        return False
+
+    def on_answered(self, ev):
+        self.answered = True
+        log("answered")
+        return False
+
+    def on_failed(self, ev):
+        log("call failed:", json.dumps(ev.get("error") or ev)[:500])
+        self.deadline = min(self.deadline, time.time() + 10)  # wait for session.closed
+        return False
+
+    def on_delegation(self, ev):
+        did = (ev.get("delegation") or {}).get("id")
+        kind, content = handle_delegation(ev.get("delegation") or {}, self.transcript)
+        self.n += 1
+        self.sb.send({"type": kind, "event_id": f"result_{self.n}_{int(time.time() * 1000)}",
+                      "delegation_id": did, "content": content})
+        log(f"delegation {did}: answered with {kind}")
+        return False
+
+    def on_closed(self, ev):
+        self.closed = True
+        log("session closed:", ev.get("reason"))
+        return True
+
+    def on_error(self, ev):
+        log("error:", json.dumps(ev.get("error") or ev)[:400])
+        return False
+
+    HANDLERS = {"transport.ringing": on_ringing, "transport.answered": on_answered,
+                "transport.failed": on_failed, "session.delegation.created": on_delegation,
+                "session.closed": on_closed, "error": on_error}
 
 
 # --- main ---
@@ -270,11 +410,7 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    global API_KEY
-    args = parse_args()
-    if args.init_env:
-        return init_env(args.init_env)
+def validate_args(args):
     for name, value in (("--to", args.to), ("--from", args.caller)):
         if not value or not E164.match(value):
             sys.exit(f"{name} must be an E.164 number such as +15105550199")
@@ -284,6 +420,9 @@ def main():
         sys.exit("--gateway must be a host name such as fra.eu.out.didww.com")
     if not 10 <= args.max_seconds <= 7200:
         sys.exit("--max-seconds must be between 10 and 7200")
+
+
+def read_instructions(args):
     if args.instructions_file:
         with open(user_path(args.instructions_file, "--instructions-file"),
                   encoding="utf-8") as f:
@@ -292,10 +431,11 @@ def main():
         instructions = (args.instructions or DEFAULT_INSTRUCTIONS).strip()
     if not instructions:
         sys.exit("the instructions are empty")
+    return instructions
 
-    creds = load_credentials(args.env_file)
-    API_KEY = creds["OPENAI_API_KEY"]
-    SECRETS.extend(creds[k] for k in KEYS)
+
+def build_payload(args, instructions, creds):
+    """The POST /v1/live/sessions body; GPT-Live dials through the trunk."""
     provider_url = f"sips:{args.gateway}:5061"  # OpenAI requires TLS signaling
     payload = {
         "session": {
@@ -316,6 +456,39 @@ def main():
             },
         },
     }
+    return provider_url, payload
+
+
+def create_session(payload):
+    """Place the call with ONE request; the session ID, or None on failure."""
+    try:
+        status, body = post("/v1/live/sessions", payload)
+    except OSError as e:  # includes urllib.error.URLError
+        log(f"create request failed ({e}); the call may still have been placed. "
+            "Check the DIDWW Outbound Call Logs before trying again.")
+        return None
+    log("create ->", status, body[:500])
+    if status not in (200, 201):
+        return None
+    return json.loads(body)["session"]["id"]
+
+
+def hang_up(sid):
+    log("hangup ->", *post(f"/v1/live/sessions/{sid}/hangup"))
+
+
+def main():
+    global API_KEY
+    args = parse_args()
+    if args.init_env:
+        return init_env(args.init_env)
+    validate_args(args)
+    instructions = read_instructions(args)
+
+    creds = load_credentials(args.env_file)
+    API_KEY = creds["OPENAI_API_KEY"]
+    SECRETS.extend(creds[k] for k in KEYS)
+    provider_url, payload = build_payload(args, instructions, creds)
     summary = (f"destination={args.to} caller={args.caller} trunk={provider_url} "
                f"model={MODEL} voice={args.voice} max={args.max_seconds}s "
                f"instructions={len(instructions)} chars")
@@ -324,92 +497,25 @@ def main():
         return 0
 
     log("placing ONE call:", summary)
-    try:
-        status, body = post("/v1/live/sessions", payload)
-    except OSError as e:  # includes urllib.error.URLError
-        log(f"create request failed ({e}); the call may still have been placed. "
-            "Check the DIDWW Outbound Call Logs before trying again.")
+    sid = create_session(payload)
+    if sid is None:
         return 1
-    log("create ->", status, body[:500])
-    if status not in (200, 201):
-        return 1
-    sid = json.loads(body)["session"]["id"]
-
     try:
         sb = Sideband(sid)
     except OSError as e:  # includes ConnectionError
         log("attach failed:", e, "- hanging up so the call does not run unattended")
-        log("hangup ->", *post(f"/v1/live/sessions/{sid}/hangup"))
+        hang_up(sid)
         return 2
     log("attached to", sid)
 
-    transcript, seen, streams = Transcript(), set(), set()
-    answered = closed = False
-    deadline, n = time.time() + args.max_seconds, 0
-    try:
-        while time.time() < deadline:
-            try:
-                msg = sb.recv(min(1.0, max(0.0, deadline - time.time())))
-            except OSError as e:  # includes ConnectionError
-                log("sideband ended:", e)
-                break
-            if msg is None:
-                continue
-            try:
-                ev = json.loads(msg)
-            except ValueError:
-                continue
-            eid = ev.get("event_id")
-            if eid in seen:
-                continue
-            if eid:
-                seen.add(eid)
-            t = ev.get("type", "")
-            if t == "session.input_transcript.delta":
-                transcript.add("person", ev.get("delta", ""))
-                continue
-            if t == "session.output_transcript.delta":
-                transcript.add("agent", ev.get("delta", ""))
-                continue
-            if t in QUIET or t.endswith(".delta"):
-                if t not in streams:  # e.g. output audio proves the agent spoke
-                    streams.add(t)
-                    log(f"{t} (first one; further ones not shown)")
-                continue
-            transcript.flush()
-            if t == "transport.ringing":
-                log("ringing")
-            elif t == "transport.answered":
-                answered = True
-                log("answered")
-            elif t == "transport.failed":
-                log("call failed:", json.dumps(ev.get("error") or ev)[:500])
-                deadline = min(deadline, time.time() + 10)  # wait for session.closed
-            elif t == "session.delegation.created":
-                did = (ev.get("delegation") or {}).get("id")
-                kind, content = handle_delegation(ev.get("delegation") or {}, transcript)
-                n += 1
-                sb.send({"type": kind, "event_id": f"result_{n}_{int(time.time() * 1000)}",
-                         "delegation_id": did, "content": content})
-                log(f"delegation {did}: answered with {kind}")
-            elif t == "session.closed":
-                closed = True
-                log("session closed:", ev.get("reason"))
-                break
-            elif t == "error":
-                log("error:", json.dumps(ev.get("error") or ev)[:400])
-            else:
-                log(t)
-    except KeyboardInterrupt:
-        log("interrupted")
-    transcript.flush()
-    if not closed:
+    call = Call(sb, args.max_seconds)
+    call.run()
+    if not call.closed:
         log("hanging up")
-        log("hangup ->", *post(f"/v1/live/sessions/{sid}/hangup"))
+        hang_up(sid)
     sb.close()
-    log("done; answered =", answered)
-    return 0 if answered else 2
-
+    log("done; answered =", call.answered)
+    return 0 if call.answered else 2
 
 if __name__ == "__main__":
     sys.exit(main())

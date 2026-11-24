@@ -29,7 +29,7 @@ DIDWW publishes a family of **agent skills** for **Claude Code** that put an AI 
   ```
 
   Then run `/mcp` inside Claude Code and sign in to the DIDWW User Panel. See [Getting started with DIDWW MCP](https://doc.didww.com/mcp/getting-started.html).
-- For outbound calls, access to DIDWW outbound trunks on the account. If **Voice**, **Outbound Trunks** in the DIDWW User Panel shows **Get Access**, apply there first ([Get access to outbound trunks](https://doc.didww.com/voice/outbound-trunks/get-access.html)): it needs a business account with a company name and VAT/TAX ID, and DIDWW replies within 48 business hours. Inbound calls work without it.
+- For outbound calls, access to DIDWW outbound trunks on the account. If **Voice**, **Outbound Trunks** in the DIDWW User Panel shows **Get Access**, apply there first ([Get access to outbound trunks](https://doc.didww.com/voice/outbound-trunks/get-access.html)): it needs a business account with a company name and VAT/TAX ID, and DIDWW replies within 48 business hours. Incoming calls without transfers work without it, except on Vogent.
 
 - An account on the voice platform you intend to use. Each skill page lists what it needs.
 
@@ -47,7 +47,7 @@ The carrier-side wiring is identical for every platform and always runs through 
 
 1. **Number.** Buy or confirm the DID. Registration-required countries add a verification wait.
 2. **Inbound trunk.** Host set to the platform's SIP ingress, digest authentication preferred, media encryption matched to the platform. The DID is assigned to the trunk.
-3. **Outbound trunk.** Only for agents that place calls. You create it in the DIDWW User Panel, because the DIDWW MCP has no outbound trunk tools; outbound access needs DIDWW's approval first. DIDWW generates the credentials. The host nearest the platform's region is used: `nyc.us.out.didww.com`, `lac.us.out.didww.com`, `mia.us.out.didww.com`, `fra.eu.out.didww.com`, `ams.eu.out.didww.com`, `sg.out.didww.com` or `hk.out.didww.com`.
+3. **Outbound trunk.** Only for agents that place or transfer calls, and always for Vogent, which imports the number with the outbound trunk's credentials. You create it in the DIDWW User Panel, because the DIDWW MCP has no outbound trunk tools; outbound access needs DIDWW's approval first. DIDWW generates the credentials. The host nearest the platform's region is used: `nyc.us.out.didww.com`, `lac.us.out.didww.com`, `mia.us.out.didww.com`, `fra.eu.out.didww.com`, `ams.eu.out.didww.com`, `sg.out.didww.com` or `hk.out.didww.com`.
 4. **Spend controls.** The outbound trunk's 24-hour limit at its minimum of 50 USD (the default is 3000), capacity limits on both trunks, and caller ID and destinations restricted, all before the first call.
 5. **Verification.** One inbound call from a mobile phone, one outbound call checking caller ID, one transfer if configured.
 
@@ -78,4 +78,4 @@ The carrier-side wiring is identical for every platform and always runs through 
 - [DIDWW MCP](https://doc.didww.com/mcp/index.html).
 - Source, tests and issue tracker: [github.com/didww/ai](https://github.com/didww/ai).
 
-Platform details in these skills were verified in August 2026 (LiveKit: September 2026).
+Platform details in these skills were verified in August 2026 (LiveKit: September 2026). The ElevenLabs, Vogent, OpenAI, Ultravox and xAI skills were checked again against DIDWW's integration guides and live calls in October and November 2026.
