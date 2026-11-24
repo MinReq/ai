@@ -294,7 +294,7 @@ def current_dir():
     except OSError:  # the current directory was deleted
         return None
 
-def same_dir(a, b):
+def same_file(a, b):
     try:
         return os.path.samefile(a, b)
     except OSError:
@@ -313,7 +313,7 @@ def user_path(path):
         sys.exit(f"--env-file {path}: the current directory no longer exists")
     given = os.path.abspath(raw)
     bases = [d for d in (home, cwd) if d]
-    base = next((d for d in bases if same_dir(os.path.dirname(given), d)), None)
+    base = next((d for d in bases if same_file(os.path.dirname(given), d)), None)
     if base is None:
         sys.exit("--env-file must name a file directly in your home directory or "
                  f"the current directory, not {path}. Move it there, run from its "
@@ -323,6 +323,12 @@ def user_path(path):
     if not any(os.path.commonpath([d, target]) == d for d in bases):
         sys.exit(f"--env-file {path} is a link to {target}, outside your home "
                  "directory and the current directory")
+    # realpath() guesses when a path gets too long; the kernel does not. Refuse
+    # unless the file the kernel reaches is the one checked above.
+    if os.path.exists(given) and not same_file(given, target):
+        sys.exit(f"--env-file {path}: cannot confirm that the file it leads to is "
+                 "in your home directory or the current directory; name that file "
+                 "itself")
     return os.path.join(base, os.path.basename(given))
 
 def load_env_file(path):

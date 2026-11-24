@@ -76,6 +76,16 @@ check("paths: a symlink pointing outside is refused", path_refused(code, out) an
 os.symlink("loop", os.path.join(tmp, "loop")); os.symlink(secretp, os.path.join(tmp, "evil")); os.symlink("loop/../evil", os.path.join(tmp, "trick.txt"))
 code, out = run(*BASE, "--instructions-file", os.path.join(tmp, "trick.txt"), "--check")
 check("paths: a symlink loop cannot smuggle in an outside file", path_refused(code, out), (code, out))
+# realpath() guesses on over-long paths; simulate that by making it name an inside decoy for the outside link.
+decoy = os.path.join(tmp, "decoy.txt")
+with open(decoy, "w") as f: f.write("Test instructions.\n")
+real_realpath = os.path.realpath
+decoy_real = real_realpath(decoy)
+os.path.realpath = lambda p, *a, **k: decoy_real if str(p).endswith("escape.txt") else real_realpath(p, *a, **k)
+try: code, out = run(*BASE, "--instructions-file", linkp, "--check")
+finally: os.path.realpath = real_realpath
+os.remove(decoy)
+check("paths: a link that realpath() misreads is refused (the kernel's file is checked)", path_refused(code, out) and "cannot confirm" in str(code), (code, out))
 subdir = os.path.join(tmp, "prompts"); os.mkdir(subdir); subp = os.path.join(subdir, "agent.txt")
 with open(subp, "w") as f: f.write("Test instructions.\n")
 code, out = run(*BASE, "--instructions-file", subp, "--check")

@@ -149,6 +149,17 @@ try:
         try: mod.load_env_file(bad); msg = None
         except SystemExit as e: msg = str(e.code)
         check(f"--env-file: {'a link pointing outside' if bad.startswith('~') else 'a file outside'} is refused", msg and "home directory" in msg and "REALTIME_TEST_OUT" not in os.environ, msg)
+    decoy = os.path.join(home, "decoy.env")
+    with open(decoy, "w") as f: f.write("REALTIME_TEST_DECOY=1\n")
+    real_realpath = os.path.realpath  # realpath() guesses on over-long paths; simulate a wrong guess
+    decoy_real = real_realpath(decoy)
+    os.path.realpath = lambda p, *a, **k: decoy_real if str(p).endswith("escape.env") else real_realpath(p, *a, **k)
+    try:
+        try: mod.load_env_file("~/escape.env"); msg = None
+        except SystemExit as e: msg = str(e.code)
+    finally:
+        os.path.realpath = real_realpath
+    check("--env-file: a link that realpath() misreads is refused (the kernel's file is checked)", msg and "cannot confirm" in msg and "REALTIME_TEST_OUT" not in os.environ, msg)
 finally:
     os.chdir(cwd0); os.environ["HOME"] = home0 if home0 is not None else os.environ.pop("HOME")
     for k in ("REALTIME_TEST_HOME", "REALTIME_TEST_CWD", "REALTIME_TEST_OUT"): os.environ.pop(k, None)
